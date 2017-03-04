@@ -22,7 +22,7 @@ class Skipgram(Word2Vec):
         kwargs["sentences"] = kwargs.get("sentences", None)
 
         if vocabulary_counts != None:
-          self.vocabulary_counts = vocabulary_counts
+            self.vocabulary_counts = vocabulary_counts
 
         super(Skipgram, self).__init__(**kwargs)
 
@@ -31,12 +31,12 @@ class Skipgram(Word2Vec):
         Build vocabulary from a sequence of sentences or from a frequency dictionary, if one was provided.
         """
         if self.vocabulary_counts != None:
-          logger.debug("building vocabulary from provided frequency map")
-          vocab = self.vocabulary_counts
+            logger.debug("building vocabulary from provided frequency map")
+            vocab = self.vocabulary_counts
         else:
-          logger.debug("default vocabulary building")
-          super(Skipgram, self).build_vocab(corpus)
-          return
+            logger.debug("default vocabulary building")
+            super(Skipgram, self).build_vocab(corpus)
+            return
 
         # assign a unique index to each word
         self.vocab, self.index2word = {}, []

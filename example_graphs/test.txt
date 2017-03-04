@@ -1,0 +1,23 @@
+----------------------------- GPyOpt Report file -----------------------------------
+GPyOpt Version 1.0.3
+Date and time:               Sat Mar  4 13:47:10 2017
+Optimization completed:      YES, 21 samples collected.
+Number initial samples:      20 
+Tolerance:                   1e-08.
+Optimization time:           0.770280122757 seconds.
+
+-------------------------------- Problem set up ------------------------------------
+Problem name:                no_name
+Problem dimension:           5
+Number continuous variables  3
+Number discrete variables    2
+Number bandits               0
+Noiseless evaluations:       True
+Cost used:                   Used defined cost
+Constrains:                  False
+
+------------------------------ Optimization set up ---------------------------------
+Normalized outputs:          True
+Model type:                  GP
+Model update interval:       1
+Acquisition type:            EI
