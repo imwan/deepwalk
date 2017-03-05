@@ -1,3 +1,0 @@
-Iteration	Mat32.variance	Mat32.lengthscale	Gaussian_noise.variance
-1.0	0.9060477276	2.37406405114	1e-06
-2.0	0.9060477276	2.37406405114	1e-06
