@@ -43,7 +43,13 @@ class DwWalker(BaseEstimator, TransformerMixin):
             print('Walk path already exists: %s' % walks_file)
         else:
             print('Walking...')
-            walks = graph.build_deepwalk_corpus(G, **walk_params)
+
+            #walks = graph.build_deepwalk_corpus(G, **walk_params)
+
+            # print('num edges', G.number_of_edges())
+            print('num nodes', len(G))
+            walks = G.simulate_walks(self.num_paths, self.path_length)
+
 
             walks_flat = [node for path in walks for node in path]
 
@@ -158,6 +164,10 @@ if __name__ == '__main__':
 
     walker = DwWalker()
     walks_file = walker.fit_transform(G)
+    print walks_file
+
+    import sys
+    sys.exit(0)
 
     # vec = DwVectorizer(corpus_file=walks_file, iter=1, verbose=0)
     # X = vec.fit_transform(None)

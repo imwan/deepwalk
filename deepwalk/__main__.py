@@ -33,7 +33,7 @@ except AttributeError:
 
 logger = logging.getLogger(__name__)
 LOGFORMAT = "%(asctime).19s %(levelname)s %(filename)s: %(lineno)s %(message)s"
-
+logger.setLevel(logging.DEBUG)
 
 def debug(type_, value, tb):
     if hasattr(sys, 'ps1') or not sys.stderr.isatty():

@@ -56,32 +56,35 @@ default_params = {
     'hs': (0, int), # gensim only: if 1, hierarchical softmax will be used
     'negative': (5, int), # gensim & fasttext: use this many words for negative sampling
     'loss': ('ns', str),
-    'num_paths': (10, int),
-    'path_length': (40, int),
     'workers': (12, int),
-    'method': (0, int),
+    'method': (0, int), # 0: gensim, 1: fasttext w/o char n-grams
     'maxn': (0, int), # fastText: 0 turns of char n-grams
+    # For random walks:
+    'num_paths': (10, int), # same for dw and node2vec
+    'walk_model': (0, int),
+    'path_length': (80, int), # dw 40, node2vec 80
+    'n2v_p': (1, int), # same as DeepWalk when q=1 and p=1
+    'n2v_q': (1, int), # 
 }
 
-# parameters for deep walking
-walk_keys = set(['num_paths', 'path_length'])
 
 # parameters for optimizing
 mixed_domain = [
-    {'name': 'size', 'type': 'discrete', 'domain': (32, 64, 100, 300, 512)},
+    {'name': 'size', 'type': 'discrete', 'domain': (32, 64, 100, 300, 500)},
     {'name': 'method', 'type': 'discrete', 'domain': (0, 1)},
-    {'name': 'window', 'type': 'discrete', 'domain': (5, 10, 15, 20, 25)},
-    #{'name': 'path_length', 'type': 'discrete', 'domain': (40, 70, 100, 130)},
+    {'name': 'window', 'type': 'discrete', 'domain': (3, 5, 10)},
+    {'name': 'negative', 'type': 'discrete', 'domain': (3, 5, 10)},
+    #{'name': 'path_length', 'type': 'discrete', 'domain': (40, 60, 80)},
     #{'name': 'num_paths', 'type': 'discrete', 'domain': (10, 20)},
 ]
 
+## Check negative sample vs heirarchical softmax
 # mixed_domain = [
-#     {'name': 'size', 'type': 'discrete', 'domain': (64,)},
+#     {'name': 'negative', 'type': 'discrete', 'domain': (0, 5)},
+#     {'name': 'negative', 'type': 'discrete', 'domain': (,)},
 # ]
 
 def run_from_params(params):
-    walk_params = dict((k, params[k]) for k in walk_keys)
-
     # We load the walks if the current parameterization of them is already done.
     walk_path = join(base_dir, 'walks', 'walks-%(num_paths)ix%(path_length)i-paths.txt' % walk_params)
     if exists(walk_path):
@@ -89,7 +92,14 @@ def run_from_params(params):
         pass
     else:
         #print('Walking...')
-        walks = graph.build_deepwalk_corpus(G, **walk_params)
+        walk_model = params['walk_model']
+        if walk_model == 'dw':
+            walks = graph.build_deepwalk_corpus(G, params['num_paths'], params['path_length'], alpha=0)
+        elif walk_model == 'n2v':
+            G = G.preprocess_transition_probs(p=params['n2v_p'], q=params['n2v_q'])
+            walks = G.simulate_walks(params['num_paths'], params['path_length'])
+        else:
+            raise Exception("Unknown walk model: %s" % walk_model)
 
         #print('Writing walks...')
         with open(walk_path, 'w+') as f:
@@ -129,7 +139,7 @@ class DwOpt:
             run_dir = join(base_dir, 'bo', run_id)
             if not exists(run_dir):
                 os.makedirs(run_dir)
-            self.fout = open(join(run_dir, 'log.json'), 'w+')
+            self.fout = open(join(run_dir, 'log.tsv'), 'w+')
         else:
             self.fout = None
         self.params = []
@@ -160,21 +170,39 @@ class DwOpt:
 
         self.evals += 1
         params['eval'] = self.evals
-        try:
-            score = run_from_params(params)
-            params['score'] = score
-        except:
-            # these will be missing rows in the log dataframe
-            self.fails += 1
-            print('\nFAILURE IN OBJECTIVE FUNCTION')
-            return 0.
+        # try:
+        #     score = run_from_params(params)
+        #     params['score'] = score
+        # except:
+        #     # these will be missing rows in the log dataframe
+        #     self.fails += 1
+        #     print('\nFAILURE IN OBJECTIVE FUNCTION')
+        #     return 0.
+        score = run_from_params(params)
+        params['score'] = score
+    
+
+        # monitor/put these first
+        cols = ['eval'] + self.opt_names + ['score']
 
         if self.fout is not None:
-            self.fout.write(json.dumps(params) + '\n')
-            self.params.append(params)
+            p = OrderedDict()
+            for k in cols:
+                p[k] = params[k]
+            for k,v in params.items():
+                if k not in p:
+                    p[k] = v
+            # self.fout.write(json.dumps(p) + '\n')
+            if self.evals == 1:
+                self.fout.write('\t'.join(p.keys()) + '\n')
+            self.fout.write('\t'.join(map(str, p.values())) + '\n')
+            self.fout.flush()
+            os.fsync(self.fout)
+        
+        self.params.append(p)
         
         # print the param values and objective value
-        df = pd.DataFrame([params]).loc[:, ['eval'] + self.opt_names + ['score']]
+        df = pd.DataFrame([params]).loc[:, cols]
         if self.evals == 1:
             print df.to_string(index=False)
         else:
@@ -201,12 +229,8 @@ def save_opt(opt, run_id):
 
 
 def read_log(run_id):
-    fname = join(base_dir, join(base_dir, 'bo', run_id, 'log.json'))
-    rows = []
-    with open(fname) as f:
-        for l in f:
-            rows.append(json.loads(l.rstrip()))
-    return pd.DataFrame(rows)
+    fname = join(base_dir, join(base_dir, 'bo', run_id, 'log.tsv'))
+    return pd.read_csv(fname, sep='\t').sort_values(by='score')
 
 
 def read_evals(run_id):
@@ -249,10 +273,13 @@ if __name__=='__main__':
         myBopt.run_optimization(max_iter, max_time)
         save_opt(myBopt, run_id)
 
-    if action == 'dw':
+    if action == 'bo':
         "Run for DwOpt job defined above."
 
-        run_id = 'dw3'
+        if len(sys.argv) >= 3:
+            run_id = sys.argv[2]
+        else:
+            raise Exception('Must specify a second run_id argument.')
 
         print('run_id: %s' % run_id)
         print('constraints:')
@@ -265,29 +292,39 @@ if __name__=='__main__':
 
         bo = BayesianOptimization(f=func.f,                  # function to optimize       
                                  domain=mixed_domain,        # box-constrains of the problem
-                                 initial_design_numdata=2,  # number data initial design
+                                 initial_design_numdata=20,  # number data initial design
                                  acquisition_type='EI',      # Expected Improvement
                                  exact_feval=True,           # True evaluations00
                                  verbosity=True)
 
-        max_iter = 1
+        max_iter = 40
         max_time = None
         bo.run_optimization(max_iter, max_time)
         save_opt(bo, run_id)
         
         func.shutdown()
-        print('Number of fails', func.fails)
-
+        print('\nNumber of fails: %i' % func.fails)
 
     if action == 'load':
-        #df1 = read_log('dw2')
-        #print df1
         if len(sys.argv) >= 3:
             run_id = sys.argv[2]
         else:
             raise Exception('Must specify a second run_id argument.')
-        df = read_evals(run_id)
-        print df
+
+        #df = read_evals(run_id)
+        df = read_log(run_id)
+        print df.drop(['output_file', 'corpus_file'], axis=1)
+
+    if action == 'test':
+        from deepwalk import graph
+
+        G, labels_matrix = load_blogcat()
+
+        print('Preprocessing transitions probs...')
+        G = G.preprocess_transition_probs(p=1,q=1)
+
+        print('Simulating walks...')
+        walks = G.simulate_walks(10, 80)
 
     print('Done')
     print('='*100)

@@ -20,7 +20,6 @@ from gensim.models import Word2Vec, KeyedVectors
 
 from deepwalk import graph
 
-
 class TopKRanker(OneVsRestClassifier):
     def predict(self, X, top_k_list):
         assert X.shape[0] == len(top_k_list)

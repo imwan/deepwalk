@@ -1,42 +1,49 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+"""
+Graph utilities.
 
-"""Graph utilities."""
+Originally by:
+__author__ = "Bryan Perozzi"
+__email__ = "bperozzi@cs.stonybrook.edu"
+"""
 
-import logging
 import sys
+import logging
 from io import open
 from os import path
 from time import time
 from glob import glob
-from six.moves import range, zip, zip_longest
-from six import iterkeys
-from collections import defaultdict, Iterable
-from multiprocessing import cpu_count
 import random
 from random import shuffle
-from itertools import product,permutations
+
+from six.moves import range, zip, zip_longest
+from six import iterkeys
+
+from collections import defaultdict, Iterable
+from multiprocessing import cpu_count
+from itertools import product, permutations
+
+import numpy as np
 from scipy.io import loadmat
 from scipy.sparse import issparse
 
 from concurrent.futures import ProcessPoolExecutor
 
-from multiprocessing import Pool
-from multiprocessing import cpu_count
+from multiprocessing import Pool, cpu_count
 
 logger = logging.getLogger("deepwalk")
-
-
-__author__ = "Bryan Perozzi"
-__email__ = "bperozzi@cs.stonybrook.edu"
+logger.setLevel(logging.DEBUG)
 
 LOGFORMAT = "%(asctime).19s %(levelname)s %(filename)s: %(lineno)s %(message)s"
 
 class Graph(defaultdict):
-    """Efficient basic implementation of nx `Graph' â€“ Undirected graphs with self loops"""
-    def __init__(self):
+    """Efficient basic implementation of nx `Graph' Undirected graphs with self loops"""
+    def __init__(self, is_directed=True, p=None, q=None):
         super(Graph, self).__init__(list)
-
+        self.is_directed = True
+        if not is_directed:
+            print('Graph is set to undirected, so you need to call '
+                  'G.make_undirected() when you add nodes or edges.')
+        
     def nodes(self):
         return self.keys()
 
@@ -45,26 +52,23 @@ class Graph(defaultdict):
 
     def subgraph(self, nodes={}):
         subgraph = Graph()
-
         for n in nodes:
             if n in self:
                 subgraph[n] = [x for x in self[n] if x in nodes]
-
         return subgraph
 
     def make_undirected(self):
-
         t0 = time()
-
         for v in self.keys():
             for other in self[v]:
                 if v != other:
                     self[other].append(v)
 
         t1 = time()
-        logger.info('make_directed: added missing edges {}s'.format(t1-t0))
+        logger.info('make_undirected: added missing edges {}s'.format(t1-t0))
 
         self.make_consistent()
+        self.is_directed = False
         return self
 
     def make_consistent(self):
@@ -77,21 +81,16 @@ class Graph(defaultdict):
         logger.info('make_consistent: made consistent in {}s'.format(t1-t0))
 
         self.remove_self_loops()
-
         return self
 
     def remove_self_loops(self):
-
         removed = 0
         t0 = time()
-
         for x in self:
             if x in self[x]:
                 self[x].remove(x)
                 removed += 1
-
         t1 = time()
-
         logger.info('remove_self_loops: removed {} loops in {}s'.format(removed, (t1-t0)))
         return self
 
@@ -100,7 +99,6 @@ class Graph(defaultdict):
             for y in self[x]:
                 if x == y:
                     return True
-
         return False
 
     def has_edge(self, v1, v2):
@@ -120,11 +118,27 @@ class Graph(defaultdict):
 
     def number_of_edges(self):
         "Returns the number of nodes in the graph"
-        return sum([self.degree(x) for x in self.keys()])/2
+        return sum([self.degree(x) for x in self.nodes()])/2
 
     def number_of_nodes(self):
         "Returns the number of nodes in the graph"
         return order()
+
+    def neighbors(self, node):
+        return list(set(self[node]))
+
+    def edges(self):
+        edges = []
+        for x in self:
+            for y in self[x]:
+                edges.append((x, y))
+        return edges
+
+    def stringify(self):
+        G = Graph()
+        for node, nodes in self.items():
+            G[str(node)] = [str(x) for x in nodes]
+        return G
 
     def random_walk(self, path_length, alpha=0, rand=random.Random(), start=None):
         """ Returns a truncated random walk.
@@ -138,7 +152,7 @@ class Graph(defaultdict):
             path = [start]
         else:
             # Sampling is uniform w.r.t V, and not w.r.t E
-            path = [rand.choice(G.keys())]
+            path = [rand.choice(self.nodes())]
 
         while len(path) < path_length:
             cur = path[-1]
@@ -151,11 +165,150 @@ class Graph(defaultdict):
                 break
         return path
 
-    def stringify(self):
-        G = Graph()
-        for node, nodes in self.items():
-            G[str(node)] = [str(x) for x in nodes]
-        return G
+    #------------------------------------------------------------------
+    # node2vec integration begins
+
+    def node2vec_walk(self, walk_length, start_node):
+        '''
+        Simulate a random walk starting from start node.
+        '''
+        
+        alias_nodes = self.alias_nodes
+        alias_edges = self.alias_edges
+
+        walk = [start_node]
+
+        while len(walk) < walk_length:
+            cur = walk[-1]
+            cur_nbrs = sorted(self.neighbors(cur))
+            if len(cur_nbrs) > 0:
+                if len(walk) == 1:
+                    walk.append(cur_nbrs[alias_draw(alias_nodes[cur][0], alias_nodes[cur][1])])
+                else:
+                    prev = walk[-2]
+                    next = cur_nbrs[alias_draw(alias_edges[(prev, cur)][0], 
+                        alias_edges[(prev, cur)][1])]
+                    walk.append(next)
+            else:
+                break
+
+        return walk
+
+    def simulate_walks(self, num_walks, walk_length):
+        '''
+        Repeatedly simulate random walks from each node.
+        '''
+        
+        walks = []
+        nodes = list(self.nodes())
+        print 'Walk iteration:'
+        for walk_iter in range(num_walks):
+            print str(walk_iter+1), '/', str(num_walks)
+            random.shuffle(nodes)
+            for node in nodes:
+                walks.append(self.node2vec_walk(walk_length=walk_length, start_node=node))
+
+        return walks
+
+    def get_alias_edge(self, src, dst):
+        '''
+        Get the alias edge setup lists for a given edge.
+        '''
+        #G = self
+        p = self.p
+        q = self.q
+
+        unnormalized_probs = []
+        for dst_nbr in sorted(self.neighbors(dst)):
+            if dst_nbr == src:
+                #unnormalized_probs.append(G[dst][dst_nbr]['weight']/p)
+                unnormalized_probs.append(1./p)
+            elif self.has_edge(dst_nbr, src):
+                #unnormalized_probs.append(G[dst][dst_nbr]['weight'])
+                unnormalized_probs.append(1.)
+            else:
+                #unnormalized_probs.append(G[dst][dst_nbr]['weight']/q)
+                unnormalized_probs.append(1./q)
+        norm_const = sum(unnormalized_probs)
+        normalized_probs =  [float(u_prob)/norm_const for u_prob in unnormalized_probs]
+
+        return alias_setup(normalized_probs)
+
+    def preprocess_transition_probs(self, p=1, q=1):
+        '''
+        Preprocessing of transition probabilities for guiding the random walks.
+        '''
+        self.p = p
+        self.q = q
+        is_directed = self.is_directed
+
+        alias_nodes = {}
+        for node in self.nodes():
+            #unnormalized_probs = [self[node][nbr]['weight'] for nbr in sorted(self.neighbors(node))]
+            unnormalized_probs = [1. for nbr in sorted(self.neighbors(node))]
+            norm_const = sum(unnormalized_probs)
+            normalized_probs =  [float(u_prob)/norm_const for u_prob in unnormalized_probs]
+            alias_nodes[node] = alias_setup(normalized_probs)
+
+        alias_edges = {}
+        triads = {}
+
+        if is_directed:
+            for edge in self.edges():
+                alias_edges[edge] = self.get_alias_edge(edge[0], edge[1])
+        else:
+            for edge in self.edges():
+                alias_edges[edge] = self.get_alias_edge(edge[0], edge[1])
+                alias_edges[(edge[1], edge[0])] = self.get_alias_edge(edge[1], edge[0])
+
+        self.alias_nodes = alias_nodes
+        self.alias_edges = alias_edges
+        return self
+
+
+def alias_setup(probs):
+    '''
+    Compute utility lists for non-uniform sampling from discrete distributions.
+    Refer to https://hips.seas.harvard.edu/blog/2013/03/03/the-alias-method-efficient-sampling-with-many-discrete-outcomes/
+    for details
+    '''
+    K = len(probs)
+    q = np.zeros(K)
+    J = np.zeros(K, dtype=np.int)
+
+    smaller = []
+    larger = []
+    for kk, prob in enumerate(probs):
+        q[kk] = K*prob
+        if q[kk] < 1.0:
+            smaller.append(kk)
+        else:
+            larger.append(kk)
+
+    while len(smaller) > 0 and len(larger) > 0:
+        small = smaller.pop()
+        large = larger.pop()
+
+        J[small] = large
+        q[large] = q[large] + q[small] - 1.0
+        if q[large] < 1.0:
+            smaller.append(large)
+        else:
+            larger.append(large)
+
+    return J, q
+
+def alias_draw(J, q):
+    '''
+    Draw sample from a non-uniform discrete distribution using alias samplinself.
+    '''
+    K = len(J)
+
+    kk = int(np.floor(np.random.rand()*K))
+    if np.random.rand() < q[kk]:
+        return kk
+    else:
+        return J[kk]
 
 # TODO add build_walks in here
 
@@ -163,7 +316,7 @@ def build_deepwalk_corpus(G, num_paths, path_length, alpha=0,
                       rand=random.Random(0)):
     walks = []
 
-    nodes = list(G.nodes())
+    nodes = list(self.nodes())
 
     for cnt in range(num_paths):
         rand.shuffle(nodes)
@@ -176,7 +329,7 @@ def build_deepwalk_corpus_iter(G, num_paths, path_length, alpha=0,
                       rand=random.Random(0)):
     walks = []
 
-    nodes = list(G.nodes())
+    nodes = list(self.nodes())
 
     for cnt in range(num_paths):
         rand.shuffle(nodes)
@@ -228,7 +381,8 @@ def load_adjacencylist(file_, undirected=False, chunksize=10000, unchecked=True)
     with open(file_) as f:
         with ProcessPoolExecutor(max_workers=cpu_count()) as executor:
             total = 0
-            for idx, adj_chunk in enumerate(executor.map(parse_func, grouper(int(chunksize), f))):
+            for idx, adj_chunk in enumerate(executor.map(parse_func, 
+                                                         grouper(int(chunksize), f))):
                 adjlist.extend(adj_chunk)
                 total += len(adj_chunk)
 
@@ -288,7 +442,6 @@ def from_networkx(G_input, undirected=True):
 
 def from_numpy(x, undirected=True):
     G = Graph()
-
     if issparse(x):
         cx = x.tocoo()
         for i,j,v in zip(cx.row, cx.col, cx.data):
@@ -323,3 +476,13 @@ def from_adjlist_unchecked(adjlist):
         G[node] = neighbors
 
     return G
+
+if __name__ == '__main__':
+
+    G = Graph(p=1, q=1)
+    G.preprocess_transition_probs()
+
+    num_walks = 10
+    walk_length = 80
+    walks = G.simulate_walks(num_walks, walk_length)
+
