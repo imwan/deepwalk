@@ -51,15 +51,16 @@ default_params = {
     'window': (5, int),
     'iter': (5, int),
     'min_count': (0, int),
-    'sample': (1e-3, float), # 1e-4
-    # 'sg': (1, int), # genssim only
-    # 'hs': (0, int), # gensim only
-    'negative': (5, int),
+    'sample': (1e-3, float), # 1e-4 threshold for configuring which higher-frequency words are randomly downsampled
+    'sg': (1, int), # gensim onlyL if 1, skipgram is used, otherwise CBOW is used
+    'hs': (0, int), # gensim only: if 1, hierarchical softmax will be used
+    'negative': (5, int), # gensim & fasttext: use this many words for negative sampling
     'loss': ('ns', str),
     'num_paths': (10, int),
     'path_length': (40, int),
     'workers': (12, int),
-    'method': (1, int)
+    'method': (0, int),
+    'maxn': (0, int), # fastText: 0 turns of char n-grams
 }
 
 # parameters for deep walking
@@ -67,30 +68,22 @@ walk_keys = set(['num_paths', 'path_length'])
 
 # parameters for optimizing
 mixed_domain = [
-    {'name': 'size', 'type': 'discrete', 'domain': (32, 64, 128, 512)},
+    {'name': 'size', 'type': 'discrete', 'domain': (32, 64, 100, 300, 512)},
     {'name': 'method', 'type': 'discrete', 'domain': (0, 1)},
     {'name': 'window', 'type': 'discrete', 'domain': (5, 10, 15, 20, 25)},
-    {'name': 'path_length', 'type': 'discrete', 'domain': (10, 40, 70, 100, 130)},
+    #{'name': 'path_length', 'type': 'discrete', 'domain': (40, 70, 100, 130)},
+    #{'name': 'num_paths', 'type': 'discrete', 'domain': (10, 20)},
 ]
 
-def vec2dict(X):
-    # add parameters being optimized
-    d = {}
-    for i, dom in enumerate(mixed_domain):
-        k = dom['name']
-        typ = default_params[k][1]
-        d[k] = typ(X[i])
-
-    # add defaults for any parameters not being optimized
-    for k, (val, typ) in default_params.items():
-        if k not in d:
-            d[k] = typ(val)
-    return d
+# mixed_domain = [
+#     {'name': 'size', 'type': 'discrete', 'domain': (64,)},
+# ]
 
 def run_from_params(params):
     walk_params = dict((k, params[k]) for k in walk_keys)
-    walk_path = join(base_dir, 'walks', 'walks-%(num_paths)ix%(path_length)i-paths.txt' % walk_params)
 
+    # We load the walks if the current parameterization of them is already done.
+    walk_path = join(base_dir, 'walks', 'walks-%(num_paths)ix%(path_length)i-paths.txt' % walk_params)
     if exists(walk_path):
         #print('Walk path already exists.')
         pass
@@ -102,7 +95,7 @@ def run_from_params(params):
         with open(walk_path, 'w+') as f:
             f.write(' '.join([node for path in walks for node in path]))
 
-    params['corpus_file'] = walk_path #"/mnt/raid1/deepwalk/blogcat/model-base.vec" #
+    params['corpus_file'] = walk_path
     params['output_file'] = join(base_dir, 'models', 'model-%s.vec' % str(datetime.datetime.utcnow()))
     _ = run_embedding(params)
 
@@ -114,18 +107,20 @@ def run_from_params(params):
 
     # negative b/c we're minimizing
     score = res[0.6][0]['micro']
-    print 'micro-f1: %.3f' % score
+    #print 'micro-f1: %.3f' % score
     return -1.*score
+
 
 class DwOpt:
     """
     :param bounds: the box constraints to define the domain in which the function is optimized.
     :param sd: standard deviation, to generate noisy evaluations of the function.
     """
-    def __init__(self, input_dim, bounds=None, sd=None, run_id=None):
+    def __init__(self, input_dim, bounds=None, default_params=None, sd=None, run_id=None):
         self.input_dim = input_dim
         self.bounds = bounds
-        self.evals = 0
+        self.default_params = default_params
+        self.evals, self.fails = 0, 0
         if sd == None: 
             self.sd = 0
         else: 
@@ -139,23 +134,51 @@ class DwOpt:
             self.fout = None
         self.params = []
 
+        # names of optimized parameters
+        self.opt_names = [x['name'] for x in self.bounds]
+        #self.other_params = dict((k,v) for k,v in default_params.items() if k not in self.output_file)
+
+    def vec2dict(self, X):
+        # add parameters being optimized
+        d = {}
+        for i, dom in enumerate(self.bounds):
+            k = dom['name']
+            typ = self.default_params[k][1]
+            d[k] = typ(X[i])
+
+        # add defaults for any parameters not being optimized
+        for k, (val, typ) in self.default_params.items():
+            if k not in d:
+                d[k] = typ(val)
+        return d
+
     def f(self, X):
         X = np.reshape(X, self.input_dim)
         n = X.shape[0]
         assert n == len(mixed_domain)
-        params = vec2dict(X)
+        params = self.vec2dict(X)
 
         self.evals += 1
         params['eval'] = self.evals
-        score = run_from_params(params)
+        try:
+            score = run_from_params(params)
+            params['score'] = score
+        except:
+            # these will be missing rows in the log dataframe
+            self.fails += 1
+            print('\nFAILURE IN OBJECTIVE FUNCTION')
+            return 0.
 
         if self.fout is not None:
-            params['score'] = score
             self.fout.write(json.dumps(params) + '\n')
             self.params.append(params)
         
-        df = pd.DataFrame(self.params).drop(['output_file', 'corpus_file'], axis=1)
-        print df
+        # print the param values and objective value
+        df = pd.DataFrame([params]).loc[:, ['eval'] + self.opt_names + ['score']]
+        if self.evals == 1:
+            print df.to_string(index=False)
+        else:
+            print df.to_string(index=False).split('\n')[-1]
 
         return score
 
@@ -170,11 +193,11 @@ def save_opt(opt, run_id):
     opt.save_evaluations(join(outdir, 'evals.txt'))
     opt.save_report(join(outdir, 'report.txt'))
 
-    print opt.X
-    print
+    #print opt.X
+    print '\nOptimal solution:'
     print opt.x_opt
-    print 
-    print opt.f(opt.x_opt)
+    #print '\nObjective function at solution:'
+    #print opt.f(opt.x_opt)
 
 
 def read_log(run_id):
@@ -188,62 +211,84 @@ def read_log(run_id):
 
 def read_evals(run_id):
     fname = join(base_dir, join(base_dir, 'bo', run_id, 'evals.txt'))
-    df = pd.read_csv(fname, sep='\t')
+    df = pd.read_csv(fname, sep='\t').sort_values(by='Y')
     return df
 
 
-if 0:
-    "Example from docs on multiple types of parameters."
-    import GPyOpt
+if __name__=='__main__':
+    if len(sys.argv) >= 2:
+        action = sys.argv[1]
+    else:
+        action = ''
 
-    run_id = 'example'
+    print('='*100)
+    print('action: %s' % action)
 
-    func = GPyOpt.objective_examples.experimentsNd.alpine1(input_dim=5) 
-    
-    mixed_domain =[{'name': 'var1_2', 'type': 'continuous', 'domain': (-10,10),'dimensionality': 2},
-               {'name': 'var3', 'type': 'continuous', 'domain': (-8,3)},
-               {'name': 'var4', 'type': 'discrete', 'domain': (-2,0,2)},
-               {'name': 'var5', 'type': 'discrete', 'domain': (-1,5)}]
+    if action == 'example':
+        "Example from docs on multiple types of parameters."
+        import GPyOpt
 
-    myBopt = GPyOpt.methods.BayesianOptimization(f=func.f,                   # function to optimize       
-                                                 domain=mixed_domain,        # box-constrains of the problem
-                                                 initial_design_numdata = 20,# number data initial design
-                                                 acquisition_type='EI',      # Expected Improvement
-                                                 exact_feval = True)         # True evaluations
+        run_id = 'example'
 
-    max_iter = 10
-    max_time = 60
-    myBopt.run_optimization(max_iter, max_time)
-    save_opt(myBopt, run_id)
+        func = GPyOpt.objective_examples.experimentsNd.alpine1(input_dim=5) 
+        
+        mixed_domain =[
+           {'name': 'var1_2', 'type': 'continuous', 'domain': (-10,10),'dimensionality': 2},
+           {'name': 'var3', 'type': 'continuous', 'domain': (-8,3)},
+           {'name': 'var4', 'type': 'discrete', 'domain': (-2,0,2)},
+           {'name': 'var5', 'type': 'discrete', 'domain': (-1,5)}]
 
-if 0:
-    "Run for DwOpt job defined above."
+        myBopt = GPyOpt.methods.BayesianOptimization(f=func.f,
+                                                     domain=mixed_domain,
+                                                     initial_design_numdata=20,
+                                                     acquisition_type='EI',
+                                                     exact_feval = True)
 
-    run_id = 'dw3'
+        max_iter = 10
+        max_time = 60
+        myBopt.run_optimization(max_iter, max_time)
+        save_opt(myBopt, run_id)
 
-    G, labels_matrix = load_blogcat()
+    if action == 'dw':
+        "Run for DwOpt job defined above."
 
-    input_dim = len(mixed_domain)
-    func = DwOpt(input_dim, run_id=run_id)
+        run_id = 'dw3'
 
-    bo = BayesianOptimization(f=func.f,                  # function to optimize       
-                             domain=mixed_domain,        # box-constrains of the problem
-                             initial_design_numdata=2,  # number data initial design
-                             acquisition_type='EI',      # Expected Improvement
-                             exact_feval=True,           # True evaluations00
-                             verbosity=True)
+        print('run_id: %s' % run_id)
+        print('constraints:')
+        print(mixed_domain)
 
-    max_iter = 1
-    max_time = None
-    bo.run_optimization(max_iter, max_time)
-    save_opt(bo, run_id)
-    func.shutdown()
+        G, labels_matrix = load_blogcat()
 
-if 0:
-    #df1 = read_log('dw2')
-    #print df1
+        input_dim = len(mixed_domain)
+        func = DwOpt(input_dim, bounds=mixed_domain, default_params=default_params, run_id=run_id)
 
-    df = read_evals('dw2')
-    print df
+        bo = BayesianOptimization(f=func.f,                  # function to optimize       
+                                 domain=mixed_domain,        # box-constrains of the problem
+                                 initial_design_numdata=2,  # number data initial design
+                                 acquisition_type='EI',      # Expected Improvement
+                                 exact_feval=True,           # True evaluations00
+                                 verbosity=True)
 
+        max_iter = 1
+        max_time = None
+        bo.run_optimization(max_iter, max_time)
+        save_opt(bo, run_id)
+        
+        func.shutdown()
+        print('Number of fails', func.fails)
+
+
+    if action == 'load':
+        #df1 = read_log('dw2')
+        #print df1
+        if len(sys.argv) >= 3:
+            run_id = sys.argv[2]
+        else:
+            raise Exception('Must specify a second run_id argument.')
+        df = read_evals(run_id)
+        print df
+
+    print('Done')
+    print('='*100)
 

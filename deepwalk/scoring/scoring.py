@@ -1,5 +1,5 @@
 """
-Script that demonstrates the multi-label classification used.
+Script that demonstrates the multi-label classification used for BlogCatalog.
 """
 from os.path import join, exists
 import random
@@ -69,13 +69,15 @@ def eval_blogcat(embeddings_file, labels_matrix=None, G=None,
     # 1. Load Embeddings
     model = KeyedVectors.load_word2vec_format(embeddings_file, binary=False)
 
+    labels = np.argwhere(labels_matrix)
+    label_cnts = pd.Series(labels[:,1]).value_counts()
+
     if verbose > 1:
         print('\nLabel counts:')
-        labels = np.argwhere(labels_matrix)
-        print pd.Series(labels[:,1]).value_counts()
+        print(label_cnts)
 
     # delete the least frequent labels, which causes balancing problems
-    labels_matrix = labels_matrix[:, :-5]
+    labels_matrix = labels_matrix[:, :-2]
 
     # Map nodes to their features (note: assumes nodes are labeled as integers 1:N) 
     features_matrix = np.asarray([model[str(node)] for node in range(len(G))])
@@ -102,9 +104,13 @@ def eval_blogcat(embeddings_file, labels_matrix=None, G=None,
 
     # 2. Shuffle, to create train/test groups
     shuffles = []
-    number_shuffles = 1 # max tries before quitting
+    number_shuffles = 1
     for x in range(number_shuffles):
-        shuffles.append(skshuffle(features_matrix, labels_matrix))
+        # if we just have one group, make the split the same every time
+        if number_shuffles == 1:
+            shuffles.append(skshuffle(features_matrix, labels_matrix, random_state=123))
+        else:
+            shuffles.append(skshuffle(features_matrix, labels_matrix))
 
     # 3. to score each train/test group
     all_results = defaultdict(list)
@@ -171,7 +177,7 @@ if __name__=='__main__':
         res = eval_blogcat(embeddings_file, G=G, 
                        labels_matrix=labels_matrix, 
                        training_percents=[0.6],
-                       normalize=1, verbose=1)
+                       normalize=1, verbose=3)
 
         """
         Train percent: 0.6
