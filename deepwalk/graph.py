@@ -39,7 +39,7 @@ class Graph(defaultdict):
     """Efficient basic implementation of nx `Graph' Undirected graphs with self loops"""
     def __init__(self, is_directed=True, p=None, q=None):
         super(Graph, self).__init__(list)
-        self.is_directed = True
+        self.is_directed = is_directed
         if not is_directed:
             print('Graph is set to undirected, so you need to call '
                   'G.make_undirected() when you add nodes or edges.')
@@ -106,11 +106,11 @@ class Graph(defaultdict):
             return True
         return False
 
-    def degree(self, nodes=None):
+    def degree(self, node):
         #if isinstance(nodes, Iterable):
         #    return {v:len(self[v]) for v in nodes}
         #else:
-        return len(self[nodes])
+        return len(self[node])
 
     def order(self):
         "Returns the number of nodes in the graph"
@@ -122,12 +122,14 @@ class Graph(defaultdict):
 
     def number_of_nodes(self):
         "Returns the number of nodes in the graph"
-        return order()
+        return self.order()
 
     def neighbors(self, node):
+        "Returns the neighbors of a node"
         return list(set(self[node]))
 
     def edges(self):
+        "Return list of edges"
         edges = []
         for x in self:
             for y in self[x]:
@@ -139,6 +141,14 @@ class Graph(defaultdict):
         for node, nodes in self.items():
             G[str(node)] = [str(x) for x in nodes]
         return G
+
+    def add_edge(self, src, dest):
+        if src != dest:
+            self[src].append(dest)
+            if not self.is_directed:
+                self[dest].append(src)
+            else:
+                raise Exception('is_directed == True but usually it should be False here.')
 
     def random_walk(self, path_length, alpha=0, rand=random.Random(), start=None):
         """ Returns a truncated random walk.
@@ -316,7 +326,7 @@ def build_deepwalk_corpus(G, num_paths, path_length, alpha=0,
                       rand=random.Random(0)):
     walks = []
 
-    nodes = list(self.nodes())
+    nodes = list(G.nodes())
 
     for cnt in range(num_paths):
         rand.shuffle(nodes)
@@ -329,7 +339,7 @@ def build_deepwalk_corpus_iter(G, num_paths, path_length, alpha=0,
                       rand=random.Random(0)):
     walks = []
 
-    nodes = list(self.nodes())
+    nodes = list(G.nodes())
 
     for cnt in range(num_paths):
         rand.shuffle(nodes)
